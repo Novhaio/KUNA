@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Casa Cuna - Marcador con Popup Superior</title>
+  <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.12.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.12.0/mapbox-gl.js"></script>
+  <style>
+    body { margin: 0; padding: 0; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+    
+    /* Leyenda */
+    #legend {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(255,255,255,0.9);
+      padding: 10px;
+      font-family: sans-serif;
+      font-size: 14px;
+      border-radius: 5px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+      z-index: 1;
+    }
+    #legend a {
+      color: #0077ff;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    
+    /* Marcador flotante */
+    .smart-marker {
+      background-image: url('https://raw.githubusercontent.com/iosuna22/mapbox-mapa/main/EdificioKuna.jpg');
+      background-size: cover;
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      border: 2px solid white;
+      box-shadow: 0 0 20px rgba(0,0,0,0.6);
+      transform: translate(-50%, -50%) translateY(-100px);
+      position: absolute;
+      z-index: 10;
+      opacity: 0;
+      transition: opacity 0.5s, transform 0.3s;
+      cursor: pointer;
+    }
+    .smart-marker.visible {
+      opacity: 1;
+    }
+    .smart-marker:hover {
+      transform: translate(-50%, -50%) translateY(-105px) scale(1.1);
+      box-shadow: 0 0 25px rgba(0,0,0,0.8);
+    }
+    
+    /* Loader */
+    #loader {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255,255,255,0.9);
+      padding: 20px;
+      border-radius: 10px;
+      text-align: center;
+      z-index: 100;
+    }
+    .spinner {
+      border: 5px solid rgba(0,0,0,0.1);
+      border-top: 5px solid #4264fb;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 15px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    /* Popup personalizado */
+    .custom-popup .mapboxgl-popup-content {
+      background: rgba(255,255,255,0.95);
+      border-radius: 8px;
+      box-shadow: 0 3px 15px rgba(0,0,0,0.2);
+      padding: 12px;
+      font-family: sans-serif;
+      pointer-events: auto; /* Permitir interacción con el popup */
+    }
+    .custom-popup .mapboxgl-popup-tip {
+      display: none;
+    }
+    
+    /* Estilo para el enlace */
+    .custom-popup a {
+      color: #4264fb;
+      text-decoration: none;
+      font-weight: bold;
+      display: inline-block;
+      padding: 2px 0;
+    }
+    .custom-popup a:hover {
+      text-decoration: underline;
+    }
+    
+    /* Zona segura alrededor del popup */
+    .popup-safe-area {
+      position: absolute;
+      width: 200px;
+      height: 120px;
+      transform: translate(-50%, -100%);
+      z-index: 5;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  
+  <!-- Marcador flotante -->
+  <div id="floating-marker" class="smart-marker"></div>
+  
+  <div id="legend">
+    <strong>Leyenda:</strong><br/>
+    <a id="goToModel" role="button" aria-label="Centrar mapa">Edificio Kuna</a>
+  </div>
+  
+  <div id="loader">
+    <div class="spinner"></div>
+    <p>Cargando vista 3D...</p>
+  </div>
+
+  <script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoiaW9zdW5hYSIsImEiOiJjbWNjeGdvZGwwZTJ3Mmpxc3RwcmhhODI3In0.k4Q1fwjfujblZ11w5aGoCQ';
+    
+    // Configuración
+    const targetLngLat = [-2.9230369118412556, 43.254037226606236];
+    const visibilityRadius = 0.0003; // Radio de visibilidad (~30 metros)
+    
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/standard',
+      center: [-2.9232, 43.2541],
+      zoom: 15,
+      pitch: 60,
+      bearing: -20
+    });
+
+    // Elementos
+    const markerEl = document.getElementById('floating-marker');
+    let popupInstance = null;
+    let popupTimeout = null;
+    let isPopupHovered = false;
+    let isMarkerHovered = false;
+
+    // Crear popup con offset mayor
+    function createPopup() {
+      return new mapboxgl.Popup({ 
+        className: 'custom-popup',
+        closeButton: false,
+        offset: { bottom: [0, -150] } // Posición más arriba
+      }).setHTML('<strong>Edificio Kuna</strong><br/><a href="https://predashboard.novha.io:3000/d/feof29yx7pkowb/bbk-kuna" target="_blank" id="popup-link">Ver dashboard</a>');
+    }
+
+    // Función para calcular distancia
+    function isNearTarget() {
+      const center = map.getCenter();
+      const dx = center.lng - targetLngLat[0];
+      const dy = center.lat - targetLngLat[1];
+      return Math.sqrt(dx*dx + dy*dy) < visibilityRadius;
+    }
+
+    // Actualizar visibilidad y posición del marcador
+    function updateMarker() {
+      const near = isNearTarget();
+      markerEl.classList.toggle('visible', near);
+      
+      if (near) {
+        const pixelPos = map.project(targetLngLat);
+        markerEl.style.left = `${pixelPos.x}px`;
+        markerEl.style.top = `${pixelPos.y}px`;
+      }
+    }
+
+    // FlyTo igual al del botón de leyenda
+    function flyToTarget() {
+      map.flyTo({
+        center: targetLngLat,
+        zoom: 18,
+        pitch: 60,
+        bearing: -300,
+        speed: 0.5,
+        curve: 2.0,
+        easing: t => t,
+        essential: true
+      });
+    }
+
+    // Mostrar el popup
+    function showPopup() {
+      if (!popupInstance && markerEl.classList.contains('visible')) {
+        popupInstance = createPopup().setLngLat(targetLngLat).addTo(map);
+        
+        // Manejar hover del popup
+        const popupElement = document.querySelector('.mapboxgl-popup');
+        if (popupElement) {
+          popupElement.addEventListener('mouseenter', () => {
+            isPopupHovered = true;
+            clearTimeout(popupTimeout);
+          });
+          
+          popupElement.addEventListener('mouseleave', () => {
+            isPopupHovered = false;
+            checkPopupClose();
+          });
+        }
+      }
+    }
+
+    // Ocultar el popup con retraso
+    function hidePopup() {
+      popupTimeout = setTimeout(() => {
+        if (!isMarkerHovered && !isPopupHovered && popupInstance) {
+          popupInstance.remove();
+          popupInstance = null;
+        }
+      }, 300); // Retraso de 300ms para permitir mover el ratón al popup
+    }
+
+    // Verificar si se debe cerrar el popup
+    function checkPopupClose() {
+      if (!isMarkerHovered && !isPopupHovered) {
+        hidePopup();
+      }
+    }
+
+    // Precargar imagen y configurar mapa
+    const img = new Image();
+    img.src = 'https://raw.githubusercontent.com/iosuna22/mapbox-mapa/main/EdificioKuna.jpg';
+    
+    img.onload = () => {
+      map.on('load', () => {
+        document.getElementById('loader').style.display = 'none';
+        
+        // Desactivar etiquetas
+        ['showPlaceLabels', 'showRoadLabels', 'showPointOfInterestLabels'].forEach(prop => {
+          map.setConfigProperty('basemap', prop, false);
+        });
+        
+        // Interacción con el marcador
+        markerEl.addEventListener('mouseenter', () => {
+          isMarkerHovered = true;
+          showPopup();
+        });
+        
+        markerEl.addEventListener('mouseleave', () => {
+          isMarkerHovered = false;
+          checkPopupClose();
+        });
+        
+        // Botón de centrado
+        document.getElementById('goToModel').addEventListener('click', flyToTarget);
+        
+        // Actualizar marcador en cada movimiento
+        map.on('move', updateMarker);
+        map.on('zoom', updateMarker);
+        
+        // Estado inicial
+        updateMarker();
+        
+        // Vuelo inicial
+        flyToTarget();
+      });
+    };
+  </script>
+</body>
+</html>
